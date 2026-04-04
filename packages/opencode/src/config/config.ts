@@ -33,6 +33,7 @@ import { Account } from "@/account"
 import { isRecord } from "@/util/record"
 import { ConfigPaths } from "./paths"
 import { Filesystem } from "@/util/filesystem"
+import type { ConsoleState } from "./console-state"
 import { AppFileSystem } from "@/filesystem"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
@@ -1055,11 +1056,14 @@ export namespace Config {
     config: Info
     directories: string[]
     deps: Promise<void>[]
+    consoleManagedProviders: string[]
+    activeOrgName?: string
   }
 
   export interface Interface {
     readonly get: () => Effect.Effect<Info>
     readonly getGlobal: () => Effect.Effect<Info>
+    readonly getConsoleState: () => Effect.Effect<ConsoleState>
     readonly update: (config: Info) => Effect.Effect<void>
     readonly updateGlobal: (config: Info) => Effect.Effect<Info>
     readonly invalidate: (wait?: boolean) => Effect.Effect<void>
@@ -1265,6 +1269,8 @@ export namespace Config {
           const auth = yield* authSvc.all().pipe(Effect.orDie)
 
           let result: Info = {}
+          const consoleManagedProviders = new Set<string>()
+          let activeOrgName: string | undefined
 
           const scope = (source: string): PluginScope => {
             if (source.startsWith("http://") || source.startsWith("https://")) return "global"
@@ -1376,26 +1382,31 @@ export namespace Config {
             log.debug("loaded custom config from OPENCODE_CONFIG_CONTENT")
           }
 
-          const active = Option.getOrUndefined(yield* accountSvc.active().pipe(Effect.orDie))
-          if (active?.active_org_id) {
+          const activeOrg = Option.getOrUndefined(
+            yield* accountSvc.activeOrg().pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+          )
+          if (activeOrg) {
             yield* Effect.gen(function* () {
               const [configOpt, tokenOpt] = yield* Effect.all(
-                [accountSvc.config(active.id, active.active_org_id!), accountSvc.token(active.id)],
+                [accountSvc.config(activeOrg.account.id, activeOrg.org.id), accountSvc.token(activeOrg.account.id)],
                 { concurrency: 2 },
               )
-              const token = Option.getOrUndefined(tokenOpt)
-              if (token) {
-                process.env["OPENCODE_CONSOLE_TOKEN"] = token
-                Env.set("OPENCODE_CONSOLE_TOKEN", token)
+              if (Option.isSome(tokenOpt)) {
+                process.env["OPENCODE_CONSOLE_TOKEN"] = tokenOpt.value
+                Env.set("OPENCODE_CONSOLE_TOKEN", tokenOpt.value)
               }
 
-              const config = Option.getOrUndefined(configOpt)
-              if (config) {
-                const source = `${active.url}/api/config`
-                const next = yield* loadConfig(JSON.stringify(config), {
+              activeOrgName = activeOrg.org.name
+
+              if (Option.isSome(configOpt)) {
+                const source = `${activeOrg.account.url}/api/config`
+                const next = yield* loadConfig(JSON.stringify(configOpt.value), {
                   dir: path.dirname(source),
                   source,
                 })
+                for (const providerID of Object.keys(next.provider ?? {})) {
+                  consoleManagedProviders.add(providerID)
+                }
                 merge(source, next, "global")
               }
             }).pipe(
@@ -1461,6 +1472,8 @@ export namespace Config {
             config: result,
             directories,
             deps,
+            consoleManagedProviders: Array.from(consoleManagedProviders),
+            activeOrgName,
           }
         })
 
@@ -1476,6 +1489,13 @@ export namespace Config {
 
         const directories = Effect.fn("Config.directories")(function* () {
           return yield* InstanceState.use(state, (s) => s.directories)
+        })
+
+        const getConsoleState = Effect.fn("Config.getConsoleState")(function* () {
+          return yield* InstanceState.use(state, (s) => ({
+            consoleManagedProviders: s.consoleManagedProviders,
+            activeOrgName: s.activeOrgName,
+          }))
         })
 
         const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
@@ -1533,6 +1553,7 @@ export namespace Config {
         return Service.of({
           get,
           getGlobal,
+          getConsoleState,
           update,
           updateGlobal,
           invalidate,
@@ -1556,6 +1577,10 @@ export namespace Config {
 
   export async function getGlobal() {
     return runPromise((svc) => svc.getGlobal())
+  }
+
+  export async function getConsoleState() {
+    return runPromise((svc) => svc.getConsoleState())
   }
 
   export async function update(config: Info) {
