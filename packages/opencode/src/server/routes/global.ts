@@ -135,7 +135,8 @@ export const GlobalRoutes = lazy(() =>
       "/sync-event",
       describeRoute({
         summary: "Subscribe to global sync events",
-        description: "Get global sync events",
+        description:
+          "Get global sync events. Pass `?sessionID=ses_...` to filter to events belonging to a single session — matches `event.sessionID` (most session/message events) and `event.info.id` (session.created). Filtering is permissive: events whose sessionID exists and doesn't match are dropped, events with no sessionID at all are forwarded.",
         operationId: "global.sync-event.subscribe",
         responses: {
           200: {
@@ -156,13 +157,34 @@ export const GlobalRoutes = lazy(() =>
           },
         },
       }),
+      validator(
+        "query",
+        z.object({
+          sessionID: z
+            .string()
+            .optional()
+            .meta({ description: "Only forward sync events whose sessionID matches this value" }),
+        }),
+      ),
       async (c) => {
-        log.info("global sync event connected")
+        const { sessionID: filterSessionID } = c.req.valid("query")
+        log.info("global sync event connected", { sessionID: filterSessionID ?? "(all)" })
         c.header("Cache-Control", "no-cache, no-transform")
         c.header("X-Accel-Buffering", "no")
         c.header("X-Content-Type-Options", "nosniff")
         return streamEvents(c, (q) => {
           return SyncEvent.subscribeAll(({ def, event }) => {
+            // Permissive filter: drop events only when their sessionID is
+            // present and doesn't match the requested filter. Events without
+            // a sessionID at all are passed through so clients still see any
+            // non-session-scoped sync events. All known session/message
+            // SyncEvents carry sessionID at the top level; session.created
+            // also carries the new id under info.id.
+            if (filterSessionID) {
+              const e = event as any
+              const sid = e?.sessionID ?? e?.info?.id
+              if (sid !== undefined && sid !== filterSessionID) return
+            }
             // TODO: don't pass def, just pass the type (and it should
             // be versioned)
             q.push(
