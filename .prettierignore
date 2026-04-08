@@ -1,2 +1,9 @@
 sst-env.d.ts
 packages/desktop/src/bindings.ts
+# Drizzle-generated migration SQL — never reformat. Prettier rewrites
+# CREATE INDEX into multi-line ALTER TABLE blocks and strips Drizzle's
+# `--> statement-breakpoint` markers, which causes the migrator to bundle
+# multiple statements into a single query and fail on mysql2.
+packages/opencode/migration/**/*.sql
+packages/opencode/migration-pg/**/*.sql
+packages/opencode/migration-mysql/**/*.sql
