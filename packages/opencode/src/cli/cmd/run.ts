@@ -8,6 +8,7 @@ import { bootstrap } from "../bootstrap"
 import { EOL } from "os"
 import { Filesystem } from "../../util/filesystem"
 import { createOpencodeClient, type Message, type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2"
+import { Log } from "../../util/log"
 import { Server } from "../../server/server"
 import { Provider } from "../../provider/provider"
 import { Agent } from "../../agent/agent"
@@ -637,32 +638,35 @@ export const RunCommand = cmd({
         UI.error("Session not found")
         process.exit(1)
       }
-      await share(sdk, sessionID)
 
-      loop().catch((e) => {
-        console.error(e)
-        process.exit(1)
+      await Log.withSession(sessionID, async () => {
+        await share(sdk, sessionID)
+
+        loop().catch((e) => {
+          console.error(e)
+          process.exit(1)
+        })
+
+        if (args.command) {
+          await sdk.session.command({
+            sessionID,
+            agent,
+            model: args.model,
+            command: args.command,
+            arguments: message,
+            variant: args.variant,
+          })
+        } else {
+          const model = args.model ? Provider.parseModel(args.model) : undefined
+          await sdk.session.prompt({
+            sessionID,
+            agent,
+            model,
+            variant: args.variant,
+            parts: [...files, { type: "text", text: message }],
+          })
+        }
       })
-
-      if (args.command) {
-        await sdk.session.command({
-          sessionID,
-          agent,
-          model: args.model,
-          command: args.command,
-          arguments: message,
-          variant: args.variant,
-        })
-      } else {
-        const model = args.model ? Provider.parseModel(args.model) : undefined
-        await sdk.session.prompt({
-          sessionID,
-          agent,
-          model,
-          variant: args.variant,
-          parts: [...files, { type: "text", text: message }],
-        })
-      }
     }
 
     if (args.attach) {
