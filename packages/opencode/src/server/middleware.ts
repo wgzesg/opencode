@@ -6,9 +6,15 @@ import type { ContentfulStatusCode } from "hono/utils/http-status"
 import type { ErrorHandler } from "hono"
 import { HTTPException } from "hono/http-exception"
 import type { Log } from "../util/log"
+import { SpanStatusCode, trace } from "@opentelemetry/api"
 
 export function errorHandler(log: Log.Logger): ErrorHandler {
   return (err, c) => {
+    const span = trace.getActiveSpan()
+    if (span) {
+      span.recordException(err as Error)
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message ?? String(err) })
+    }
     log.error("failed", {
       error: err,
     })
