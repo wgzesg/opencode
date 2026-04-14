@@ -91,3 +91,67 @@ describe("LogTls enqueue from Log.create", () => {
     expect(rec?.level).toBe("ERROR")
   })
 })
+
+describe("LogTls batching", () => {
+  const saved: Record<string, string | undefined> = {}
+
+  beforeEach(() => {
+    clearEnv(saved)
+    process.env.VOLCENGINE_ACCESS_KEY_ID = "k"
+    process.env.VOLCENGINE_ACCESS_KEY_SECRET = "s"
+    process.env.VOLCENGINE_ENDPOINT = "tls-cn-beijing.volces.com"
+    process.env.VOLCENGINE_REGION = "cn-beijing"
+    process.env.OPENCODE_TLS_TOPIC_ID = "topic-1"
+  })
+  afterEach(() => restoreEnv(saved))
+
+  test("flushes when batch threshold is reached", async () => {
+    const { LogTls } = await import("../../src/util/log-tls")
+    LogTls.reinitForTest()
+    LogTls.drainForTest()
+    const batches: any[][] = []
+    LogTls.setFlusherForTest(async (records: any[]) => {
+      batches.push(records)
+    })
+    for (let i = 0; i < 100; i++) {
+      LogTls.enqueue({ time: Date.now(), level: "INFO", message: `m${i}`, tags: {} })
+    }
+    await new Promise((r) => setImmediate(r))
+    expect(batches.length).toBe(1)
+    expect(batches[0].length).toBe(100)
+  })
+
+  test("drops oldest on overflow and reports via warnHook", async () => {
+    const { LogTls } = await import("../../src/util/log-tls")
+    LogTls.reinitForTest()
+    LogTls.drainForTest()
+    const warns: string[] = []
+    LogTls.setWarnHookForTest((msg: string) => warns.push(msg))
+    LogTls.setFlusherForTest(async () => {})
+    LogTls.setFlushThresholdForTest(100_000)
+    for (let i = 0; i < 5010; i++) {
+      LogTls.enqueue({ time: Date.now(), level: "INFO", message: "overflow", tags: {} })
+    }
+    expect(LogTls.bufferSize()).toBe(5000)
+    expect(warns.some((w) => w.includes("dropped"))).toBe(true)
+    LogTls.setFlushThresholdForTest(100)
+  })
+
+  test("flushNow flushes any buffered records", async () => {
+    const { LogTls } = await import("../../src/util/log-tls")
+    LogTls.reinitForTest()
+    LogTls.drainForTest()
+    const batches: any[][] = []
+    LogTls.setFlusherForTest(async (records: any[]) => {
+      batches.push(records)
+    })
+    LogTls.setFlushThresholdForTest(100_000)
+    LogTls.enqueue({ time: Date.now(), level: "INFO", message: "m1", tags: {} })
+    LogTls.enqueue({ time: Date.now(), level: "INFO", message: "m2", tags: {} })
+    await LogTls.flushNow()
+    expect(batches.length).toBe(1)
+    expect(batches[0].length).toBe(2)
+    expect(LogTls.bufferSize()).toBe(0)
+    LogTls.setFlushThresholdForTest(100)
+  })
+})
