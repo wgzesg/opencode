@@ -1,10 +1,12 @@
 import path from "path"
 import fs from "fs/promises"
 import { createWriteStream } from "fs"
+import { AsyncLocalStorage } from "async_hooks"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
 import { activeSpanIds } from "../telemetry/log-correlation"
+import { LogTls } from "./log-tls"
 
 export namespace Log {
   export const Level = z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).meta({ ref: "LogLevel", description: "Log level" })
@@ -41,6 +43,16 @@ export namespace Log {
 
   const loggers = new Map<string, Logger>()
 
+  const sessionStore = new AsyncLocalStorage<{ sessionID: string }>()
+
+  export function withSession<T>(sessionID: string, fn: () => T): T {
+    return sessionStore.run({ sessionID }, fn)
+  }
+
+  export function currentSessionID(): string | undefined {
+    return sessionStore.getStore()?.sessionID
+  }
+
   export const Default = create({ service: "default" })
 
   export interface Options {
@@ -76,20 +88,38 @@ export namespace Log {
   export async function init(options: Options) {
     if (options.level) level = options.level
     cleanup(Global.Path.log)
-    if (options.print) return
-    logpath = path.join(
-      Global.Path.log,
-      options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
-    )
-    await fs.truncate(logpath).catch(() => {})
-    const stream = createWriteStream(logpath, { flags: "a" })
-    write = async (msg: any) => {
-      return new Promise((resolve, reject) => {
-        stream.write(msg, (err) => {
-          if (err) reject(err)
-          else resolve(msg.length)
+    if (options.print) {
+      logpath = ""
+      write = (msg: any) => {
+        process.stderr.write(msg)
+        return msg.length
+      }
+    } else {
+      logpath = path.join(
+        Global.Path.log,
+        options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
+      )
+      await fs.truncate(logpath).catch(() => {})
+      const stream = createWriteStream(logpath, { flags: "a" })
+      write = async (msg: any) => {
+        return new Promise((resolve, reject) => {
+          stream.write(msg, (err) => {
+            if (err) reject(err)
+            else resolve(msg.length)
+          })
         })
+      }
+    }
+    if (LogTls.isEnabled()) {
+      Default.info("log-tls", {
+        status: "enabled",
+        endpoint: process.env.VOLCENGINE_ENDPOINT,
+        topic: process.env.OPENCODE_TLS_TOPIC_ID,
       })
+    } else if (process.env.OPENCODE_TLS_DISABLED === "1" || process.env.OPENCODE_TLS_DISABLED === "true") {
+      Default.info("log-tls", { status: "disabled-by-env" })
+    } else if (process.env.VOLCENGINE_ACCESS_KEY_ID || process.env.OPENCODE_TLS_TOPIC_ID) {
+      Default.info("log-tls", { status: "disabled-missing-env" })
     }
   }
 
@@ -125,11 +155,14 @@ export namespace Log {
     }
 
     function build(message: any, extra?: Record<string, any>) {
-      const prefix = Object.entries({
+      const implicit = sessionStore.getStore()
+      const merged: Record<string, any> = {
+        ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
         ...tags,
         ...(activeSpanIds() as Record<string, any>),
         ...extra,
-      })
+      }
+      const prefix = Object.entries(merged)
         .filter(([_, value]) => value !== undefined && value !== null)
         .map(([key, value]) => {
           const prefix = `${key}=`
@@ -145,24 +178,68 @@ export namespace Log {
     }
     const result: Logger = {
       debug(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("DEBUG")) {
-          write("DEBUG " + build(message, extra))
+        if (!shouldLog("DEBUG")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("DEBUG " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "DEBUG",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       info(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("INFO")) {
-          write("INFO  " + build(message, extra))
+        if (!shouldLog("INFO")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("INFO  " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "INFO",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       error(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("ERROR")) {
-          write("ERROR " + build(message, extra))
+        if (!shouldLog("ERROR")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("ERROR " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "ERROR",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       warn(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("WARN")) {
-          write("WARN  " + build(message, extra))
+        if (!shouldLog("WARN")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("WARN  " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "WARN",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       tag(key: string, value: string) {
         if (tags) tags[key] = value

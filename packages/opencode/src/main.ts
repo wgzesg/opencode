@@ -3,6 +3,7 @@ import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
+import { LogTls } from "./util/log-tls"
 import { ConsoleCommand } from "./cli/cmd/account"
 import { ProvidersCommand } from "./cli/cmd/providers"
 import { AgentCommand } from "./cli/cmd/agent"
@@ -47,19 +48,6 @@ process.on("uncaughtException", (e) => {
   Log.Default.error("exception", {
     e: errorMessage(e),
   })
-})
-
-async function shutdownTelemetry() {
-  if (process.env["OPENCODE_OTEL_ENABLED"] === "true" || process.env["OPENCODE_OTEL_ENABLED"] === "1") {
-    const { shutdown } = await import("./telemetry/otel")
-    await shutdown().catch(() => {})
-  }
-}
-process.on("SIGTERM", () => {
-  shutdownTelemetry().finally(() => process.exit(0))
-})
-process.on("SIGINT", () => {
-  shutdownTelemetry().finally(() => process.exit(130))
 })
 
 const args = hideBin(process.argv)
@@ -108,6 +96,25 @@ const cli = yargs(args)
         if (Installation.isLocal()) return "DEBUG"
         return "INFO"
       })(),
+    })
+
+    const __logTlsShutdown = async () => {
+      try { await LogTls.shutdown(2000) } catch {}
+      if (process.env["OPENCODE_OTEL_ENABLED"] === "true" || process.env["OPENCODE_OTEL_ENABLED"] === "1") {
+        try {
+          const { shutdown } = await import("./telemetry/otel")
+          await shutdown()
+        } catch {}
+      }
+    }
+    process.on("beforeExit", __logTlsShutdown)
+    process.on("SIGINT", async () => {
+      await __logTlsShutdown()
+      process.exit(130)
+    })
+    process.on("SIGTERM", async () => {
+      await __logTlsShutdown()
+      process.exit(143)
     })
 
     Heap.start()

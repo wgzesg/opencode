@@ -172,31 +172,34 @@ export const GlobalRoutes = lazy(() =>
         c.header("Cache-Control", "no-cache, no-transform")
         c.header("X-Accel-Buffering", "no")
         c.header("X-Content-Type-Options", "nosniff")
-        return streamEvents(c, (q) => {
-          return SyncEvent.subscribeAll(({ def, event }) => {
-            // Permissive filter: drop events only when their sessionID is
-            // present and doesn't match the requested filter. Events without
-            // a sessionID at all are passed through so clients still see any
-            // non-session-scoped sync events. All known session/message
-            // SyncEvents carry sessionID at the top level; session.created
-            // also carries the new id under info.id.
-            if (filterSessionID) {
-              const e = event as any
-              const sid = e?.sessionID ?? e?.info?.id
-              if (sid !== undefined && sid !== filterSessionID) return
-            }
-            // TODO: don't pass def, just pass the type (and it should
-            // be versioned)
-            q.push(
-              JSON.stringify({
-                payload: {
-                  ...event,
-                  type: SyncEvent.versionedType(def.type, def.version),
-                },
-              }),
-            )
+        const run = async () =>
+          streamEvents(c, (q) => {
+            return SyncEvent.subscribeAll(({ def, event }) => {
+              // Permissive filter: drop events only when their sessionID is
+              // present and doesn't match the requested filter. Events without
+              // a sessionID at all are passed through so clients still see any
+              // non-session-scoped sync events. All known session/message
+              // SyncEvents carry sessionID at the top level; session.created
+              // also carries the new id under info.id.
+              if (filterSessionID) {
+                const e = event as any
+                const sid = e?.sessionID ?? e?.info?.id
+                if (sid !== undefined && sid !== filterSessionID) return
+              }
+              // TODO: don't pass def, just pass the type (and it should
+              // be versioned)
+              q.push(
+                JSON.stringify({
+                  payload: {
+                    ...event,
+                    type: SyncEvent.versionedType(def.type, def.version),
+                  },
+                }),
+              )
+            })
           })
-        })
+        if (filterSessionID) return Log.withSession(filterSessionID, () => run())
+        return run()
       },
     )
     .get(
