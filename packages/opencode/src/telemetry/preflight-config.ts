@@ -46,6 +46,7 @@ export namespace TelemetryPreflight {
 
   let cache: Telemetry | undefined
   let cacheLoaded = false
+  let defaultCwd: string | undefined
 
   function readFileMaybe(p: string): string | undefined {
     try {
@@ -103,12 +104,13 @@ export namespace TelemetryPreflight {
   }
 
   /** Synchronous load. Safe to call multiple times; cached after first call. */
-  export function load(cwd: string = process.cwd()): Telemetry {
+  export function load(cwd?: string): Telemetry {
     if (cacheLoaded) return cache ?? {}
     cacheLoaded = true
+    const effectiveCwd = cwd ?? defaultCwd ?? process.cwd()
     const seen = new Set<string>()
     let merged: Telemetry | undefined
-    for (const p of candidatePaths(cwd)) {
+    for (const p of candidatePaths(effectiveCwd)) {
       const abs = path.resolve(p)
       if (seen.has(abs)) continue
       seen.add(abs)
@@ -125,5 +127,11 @@ export namespace TelemetryPreflight {
   export function resetForTest(): void {
     cache = undefined
     cacheLoaded = false
+    defaultCwd = undefined
+  }
+
+  /** Override the default cwd used by subsequent `load()` calls. Test-only. */
+  export function setDefaultCwdForTest(cwd: string | undefined): void {
+    defaultCwd = cwd
   }
 }

@@ -1,6 +1,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
+import fs from "fs"
+import os from "os"
+import path from "path"
 import { LogTls as LogTlsStatic } from "../../src/util/log-tls"
 import { Log } from "../../src/util/log"
+import { TelemetryPreflight } from "../../src/telemetry/preflight-config"
 
 const REQUIRED_ENV = [
   "VOLCENGINE_ACCESS_KEY_ID",
@@ -10,6 +14,12 @@ const REQUIRED_ENV = [
   "OPENCODE_TLS_TOPIC_ID",
 ]
 
+// Also tracked so the preflight config loader's cwd-upward search can be
+// sandboxed into an empty tmp dir for each test (so a repo-root opencode.json
+// with telemetry.logs doesn't leak into these env-only tests).
+const PREFLIGHT_ENV = ["HOME", "XDG_CONFIG_HOME", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"]
+let sandboxDir: string | undefined
+
 function clearEnv(saved: Record<string, string | undefined>) {
   for (const key of REQUIRED_ENV) {
     saved[key] = process.env[key]
@@ -17,6 +27,15 @@ function clearEnv(saved: Record<string, string | undefined>) {
   }
   saved["OPENCODE_TLS_DISABLED"] = process.env["OPENCODE_TLS_DISABLED"]
   delete process.env["OPENCODE_TLS_DISABLED"]
+  for (const key of PREFLIGHT_ENV) {
+    saved[key] = process.env[key]
+    delete process.env[key]
+  }
+  sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), "log-tls-test-"))
+  process.env.HOME = sandboxDir
+  process.env.XDG_CONFIG_HOME = path.join(sandboxDir, ".config")
+  TelemetryPreflight.resetForTest()
+  TelemetryPreflight.setDefaultCwdForTest(sandboxDir)
 }
 
 function restoreEnv(saved: Record<string, string | undefined>) {
@@ -24,6 +43,13 @@ function restoreEnv(saved: Record<string, string | undefined>) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+  if (sandboxDir) {
+    try {
+      fs.rmSync(sandboxDir, { recursive: true, force: true })
+    } catch {}
+    sandboxDir = undefined
+  }
+  TelemetryPreflight.resetForTest()
 }
 
 describe("LogTls (disabled)", () => {
