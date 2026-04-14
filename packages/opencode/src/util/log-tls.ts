@@ -35,11 +35,12 @@ export namespace LogTls {
   async function volcengineFlusher(records: Record[]): Promise<void> {
     if (!config) return
     const { tlsOpenapi } = await import("@volcengine/openapi")
-    process.env.VOLCENGINE_ACCESS_KEY_ID = config.accessKeyId
-    process.env.VOLCENGINE_ACCESS_KEY_SECRET = config.accessKeySecret
-    process.env.VOLCENGINE_ENDPOINT = config.endpoint
-    process.env.VOLCENGINE_REGION = config.region
     const svc = tlsOpenapi.defaultService
+    svc.setAccessKeyId(config.accessKeyId)
+    svc.setSecretKey(config.accessKeySecret)
+    svc.setHost(config.endpoint.replace(/^https?:\/\//, ""))
+    svc.setRegion(config.region)
+    svc.setProtocol("https:")
     const logBuffer = await tlsOpenapi.TlsService.objToProtoBuffer({
       LogGroups: [
         {
