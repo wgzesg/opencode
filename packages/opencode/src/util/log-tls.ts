@@ -73,11 +73,19 @@ export namespace LogTls {
 
   function readConfig(): Config | undefined {
     if (process.env.OPENCODE_TLS_DISABLED === "1" || process.env.OPENCODE_TLS_DISABLED === "true") return undefined
-    const ak = process.env.VOLCENGINE_ACCESS_KEY_ID
-    const sk = process.env.VOLCENGINE_ACCESS_KEY_SECRET
-    const endpoint = process.env.VOLCENGINE_ENDPOINT
-    const region = process.env.VOLCENGINE_REGION
-    const topicId = process.env.OPENCODE_TLS_TOPIC_ID
+    // Preflight config (opencode.json telemetry.logs) wins over env.
+    let fromFile: import("../telemetry/preflight-config").TelemetryPreflight.LogsConfig | undefined
+    try {
+      const { TelemetryPreflight } = require("../telemetry/preflight-config") as typeof import("../telemetry/preflight-config")
+      fromFile = TelemetryPreflight.load().logs
+    } catch {}
+    if (fromFile?.enabled === false) return undefined
+    if (fromFile?.provider && fromFile.provider !== "volcengine.tls") return undefined
+    const ak = fromFile?.accessKeyId ?? process.env.VOLCENGINE_ACCESS_KEY_ID
+    const sk = fromFile?.accessKeySecret ?? process.env.VOLCENGINE_ACCESS_KEY_SECRET
+    const endpoint = fromFile?.endpoint ?? process.env.VOLCENGINE_ENDPOINT
+    const region = fromFile?.region ?? process.env.VOLCENGINE_REGION
+    const topicId = fromFile?.topicId ?? process.env.OPENCODE_TLS_TOPIC_ID
     if (!ak || !sk || !endpoint || !region || !topicId) return undefined
     return {
       accessKeyId: ak,
@@ -85,7 +93,7 @@ export namespace LogTls {
       endpoint,
       region,
       topicId,
-      source: process.env.OPENCODE_TLS_SOURCE ?? "opencode",
+      source: fromFile?.source ?? process.env.OPENCODE_TLS_SOURCE ?? "opencode",
     }
   }
 
