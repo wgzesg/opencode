@@ -24,10 +24,20 @@ import { NamedError } from "@opencode-ai/util/error"
 
 const log = Log.create({ service: "server" })
 
-export const SessionRoutes = lazy(() =>
-  new Hono()
-    .get(
-      "/",
+export const SessionRoutes = lazy(() => {
+  const app = new Hono()
+  app.use("/:sessionID", async (c, next) => {
+    const sessionID = c.req.param("sessionID")
+    if (!sessionID) return next()
+    return Log.withSession(sessionID, () => next())
+  })
+  app.use("/:sessionID/*", async (c, next) => {
+    const sessionID = c.req.param("sessionID")
+    if (!sessionID) return next()
+    return Log.withSession(sessionID, () => next())
+  })
+  return app.get(
+    "/",
       describeRoute({
         summary: "List sessions",
         description: "Get a list of all OpenCode sessions, sorted by most recently updated.",
@@ -1027,5 +1037,5 @@ export const SessionRoutes = lazy(() =>
         })
         return c.json(true)
       },
-    ),
-)
+    )
+})
