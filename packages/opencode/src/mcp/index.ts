@@ -16,6 +16,7 @@ import z from "zod/v4"
 import { Instance } from "../project/instance"
 import { Installation } from "../installation"
 import { withTimeout } from "@/util/timeout"
+import { withSpan } from "@/telemetry/span"
 import { AppFileSystem } from "@/filesystem"
 import { McpOAuthProvider } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
@@ -145,16 +146,22 @@ export namespace MCP {
       description: mcpTool.description ?? "",
       inputSchema: jsonSchema(schema),
       execute: async (args: unknown) => {
-        return client.callTool(
-          {
-            name: mcpTool.name,
-            arguments: (args || {}) as Record<string, unknown>,
-          },
-          CallToolResultSchema,
-          {
-            resetTimeoutOnProgress: true,
-            timeout,
-          },
+        return withSpan(
+          "opencode.mcp",
+          `mcp.call_tool.${sanitize(mcpTool.name)}`,
+          { "tool.name": mcpTool.name, "tool.provider": "mcp" },
+          () =>
+            client.callTool(
+              {
+                name: mcpTool.name,
+                arguments: (args || {}) as Record<string, unknown>,
+              },
+              CallToolResultSchema,
+              {
+                resetTimeoutOnProgress: true,
+                timeout,
+              },
+            ),
         )
       },
     })
