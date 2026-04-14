@@ -1016,6 +1016,32 @@ export namespace Config {
             .describe("Token buffer for compaction. Leaves enough window to avoid overflow during compaction."),
         })
         .optional(),
+      telemetry: z
+        .object({
+          logs: z
+            .object({
+              provider: z.string().optional().describe("Log sink provider id (e.g. 'volcengine.tls')"),
+              enabled: z.boolean().optional(),
+              accessKeyId: z.string().optional(),
+              accessKeySecret: z.string().optional(),
+              endpoint: z.string().optional(),
+              region: z.string().optional(),
+              topicId: z.string().optional(),
+              source: z.string().optional(),
+            })
+            .optional(),
+          traces: z
+            .object({
+              provider: z.string().optional().describe("Trace exporter provider id (e.g. 'otlp-http')"),
+              enabled: z.boolean().optional(),
+              endpoint: z.string().optional(),
+              serviceName: z.string().optional(),
+              sampleRatio: z.number().min(0).max(1).optional(),
+            })
+            .optional(),
+        })
+        .optional()
+        .describe("Optional observability sinks. Provider-based; values here take precedence over env vars."),
       experimental: z
         .object({
           disable_paste_summary: z.boolean().optional(),
