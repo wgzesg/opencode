@@ -4,6 +4,7 @@ import { createWriteStream } from "fs"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
+import { activeSpanIds } from "../telemetry/log-correlation"
 
 export namespace Log {
   export const Level = z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).meta({ ref: "LogLevel", description: "Log level" })
@@ -55,6 +56,21 @@ export namespace Log {
   let write = (msg: any) => {
     process.stderr.write(msg)
     return msg.length
+  }
+
+  /** Test-only: swap the write function. Returns to default when called with null. */
+  export function __setWriteForTest(fn: ((msg: any) => void) | null) {
+    if (fn === null) {
+      write = (msg: any) => {
+        process.stderr.write(msg)
+        return msg.length
+      }
+    } else {
+      write = (msg: any) => {
+        fn(msg)
+        return msg.length
+      }
+    }
   }
 
   export async function init(options: Options) {
@@ -111,6 +127,7 @@ export namespace Log {
     function build(message: any, extra?: Record<string, any>) {
       const prefix = Object.entries({
         ...tags,
+        ...(activeSpanIds() as Record<string, any>),
         ...extra,
       })
         .filter(([_, value]) => value !== undefined && value !== null)
