@@ -56,6 +56,7 @@ import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
 import { ModelID, ProviderID } from "./schema"
+import { withSpan } from "../telemetry/span"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -1650,7 +1651,9 @@ export namespace Provider {
   }
 
   export async function getProvider(providerID: ProviderID) {
-    return runPromise((svc) => svc.getProvider(providerID))
+    return withSpan("opencode.provider", "provider.get_provider", { "provider.id": providerID }, () =>
+      runPromise((svc) => svc.getProvider(providerID)),
+    )
   }
 
   export async function getModel(providerID: ProviderID, modelID: ModelID) {
@@ -1658,7 +1661,12 @@ export namespace Provider {
   }
 
   export async function getLanguage(model: Model) {
-    return runPromise((svc) => svc.getLanguage(model))
+    return withSpan(
+      "opencode.provider",
+      "provider.get_language",
+      { "provider.id": model.providerID, "model.id": model.id },
+      () => runPromise((svc) => svc.getLanguage(model)),
+    )
   }
 
   export async function closest(providerID: ProviderID, query: string[]) {

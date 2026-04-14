@@ -3,6 +3,7 @@ import { migrate as migrateSqlite } from "drizzle-orm/bun-sqlite/migrator"
 import { type SQLiteTransaction } from "drizzle-orm/sqlite-core"
 import { type PostgresJsDatabase } from "drizzle-orm/postgres-js"
 export * from "drizzle-orm"
+import { withSpan } from "../telemetry/span"
 import { Context } from "../util/context"
 import { lazy } from "../util/lazy"
 import { Global } from "../global"
@@ -239,18 +240,20 @@ export namespace Database {
   }>("database")
 
   export async function use<T>(callback: (trx: TxOrDb) => T | Promise<T>): Promise<T> {
-    try {
-      return await callback(ctx.use().tx)
-    } catch (err) {
-      if (err instanceof Context.NotFound) {
-        const effects: (() => void | Promise<void>)[] = []
-        const client = await getClient()
-        const result = await ctx.provide({ effects, tx: client }, () => callback(client))
-        for (const effect of effects) await effect()
-        return result
+    return withSpan("opencode.db", "db.use", { "db.backend": DIALECT }, async () => {
+      try {
+        return await callback(ctx.use().tx)
+      } catch (err) {
+        if (err instanceof Context.NotFound) {
+          const effects: (() => void | Promise<void>)[] = []
+          const client = await getClient()
+          const result = await ctx.provide({ effects, tx: client }, () => callback(client))
+          for (const effect of effects) await effect()
+          return result
+        }
+        throw err
       }
-      throw err
-    }
+    })
   }
 
   export function effect(fn: () => any | Promise<any>) {

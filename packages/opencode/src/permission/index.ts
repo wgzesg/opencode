@@ -1,3 +1,4 @@
+import { withSpan } from "@/telemetry/span"
 import { Bus } from "@/bus"
 import { BusEvent } from "@/bus/bus-event"
 import { Config } from "@/config/config"
@@ -314,7 +315,16 @@ export namespace Permission {
   export const { runPromise } = makeRuntime(Service, defaultLayer)
 
   export async function ask(input: z.infer<typeof AskInput>) {
-    return runPromise((s) => s.ask(input))
+    return withSpan(
+      "opencode.permission",
+      "permission.ask",
+      {
+        "session.id": input.sessionID,
+        "tool.name": input.permission,
+        "permission.pattern": input.patterns.join(","),
+      },
+      () => runPromise((s) => s.ask(input)),
+    )
   }
 
   export async function reply(input: z.infer<typeof ReplyInput>) {
