@@ -81,6 +81,14 @@ export namespace Flag {
   export const OPENCODE_DISABLE_CHANNEL_DB = truthy("OPENCODE_DISABLE_CHANNEL_DB")
   export const OPENCODE_SKIP_MIGRATIONS = truthy("OPENCODE_SKIP_MIGRATIONS")
   export const OPENCODE_STRICT_CONFIG_DEPS = truthy("OPENCODE_STRICT_CONFIG_DEPS")
+  export const OPENCODE_OTEL_ENABLED = truthy("OPENCODE_OTEL_ENABLED")
+  export const OPENCODE_OTEL_SAMPLE_RATIO = (() => {
+    const raw = process.env["OPENCODE_OTEL_SAMPLE_RATIO"]
+    if (!raw) return 1
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return 1
+    return parsed
+  })()
 
   function number(key: string) {
     const value = process.env[key]
