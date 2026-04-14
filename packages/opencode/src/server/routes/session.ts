@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
+import { SpanStatusCode, context, trace } from "@opentelemetry/api"
 import { SessionID, MessageID, PartID } from "@/session/schema"
 import z from "zod"
 import { Session } from "../../session"
@@ -816,7 +817,25 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async (stream) => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
-          const msg = await SessionPrompt.prompt({ ...body, sessionID })
+          const tracer = trace.getTracer("opencode.session")
+          const span = tracer.startSpan("session.prompt", {
+            attributes: {
+              "session.id": sessionID,
+              "message.part_count": Array.isArray((body as any).parts) ? (body as any).parts.length : undefined,
+            },
+          })
+          let msg: Awaited<ReturnType<typeof SessionPrompt.prompt>>
+          try {
+            msg = await context.with(trace.setSpan(context.active(), span), () =>
+              SessionPrompt.prompt({ ...body, sessionID }),
+            )
+          } catch (err) {
+            span.recordException(err as Error)
+            span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message ?? String(err) })
+            throw err
+          } finally {
+            span.end()
+          }
           stream.write(JSON.stringify(msg))
         })
       },
@@ -848,12 +867,25 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async () => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
-          SessionPrompt.prompt({ ...body, sessionID }).catch((err) => {
+          const tracer = trace.getTracer("opencode.session")
+          const span = tracer.startSpan("session.prompt", {
+            attributes: {
+              "session.id": sessionID,
+              "message.part_count": Array.isArray((body as any).parts) ? (body as any).parts.length : undefined,
+            },
+          })
+          context.with(trace.setSpan(context.active(), span), () =>
+            SessionPrompt.prompt({ ...body, sessionID }),
+          ).catch((err) => {
+            span.recordException(err as Error)
+            span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message ?? String(err) })
             log.error("prompt_async failed", { sessionID, error: err })
             Bus.publish(Session.Event.Error, {
               sessionID,
               error: new NamedError.Unknown({ message: err instanceof Error ? err.message : String(err) }).toObject(),
             })
+          }).finally(() => {
+            span.end()
           })
         })
       },
