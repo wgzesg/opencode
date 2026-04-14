@@ -1,5 +1,6 @@
 import { Provider } from "@/provider/provider"
 import { Log } from "@/util/log"
+import { SpanStatusCode, context, trace } from "@opentelemetry/api"
 import { Cause, Effect, Layer, Record, ServiceMap } from "effect"
 import * as Queue from "effect/Queue"
 import * as Stream from "effect/Stream"
@@ -90,6 +91,27 @@ export namespace LLM {
       modelID: input.model.id,
       providerID: input.model.providerID,
     })
+    const tracer = trace.getTracer("opencode.llm")
+    const span = tracer.startSpan("llm.stream", {
+      attributes: {
+        "session.id": input.sessionID,
+        "provider.id": input.model.providerID,
+        "model.id": input.model.id,
+        "agent.name": input.agent.name,
+        "agent.mode": input.agent.mode,
+        "llm.small": input.small ?? false,
+        "llm.tool_choice": input.toolChoice ?? "auto",
+        "llm.tool_count": Object.keys(input.tools ?? {}).length,
+      },
+    })
+    const activeCtx = trace.setSpan(context.active(), span)
+    const endSpanOnStreamEnd = (err?: unknown) => {
+      if (err) {
+        span.recordException(err as Error)
+        span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error)?.message ?? String(err) })
+      }
+      span.end()
+    }
     const [language, cfg, provider, auth] = await Promise.all([
       Provider.getLanguage(input.model),
       Config.get(),
@@ -253,11 +275,25 @@ export namespace LLM {
       }
     }
 
-    return streamText({
+    return context.with(activeCtx, () => streamText({
       onError(error) {
         l.error("stream error", {
           error,
         })
+        endSpanOnStreamEnd(error)
+      },
+      onFinish(event) {
+        try {
+          const usage: any = (event as any)?.usage
+          if (usage) {
+            if (typeof usage.inputTokens === "number") span.setAttribute("llm.input_tokens", usage.inputTokens)
+            if (typeof usage.outputTokens === "number") span.setAttribute("llm.output_tokens", usage.outputTokens)
+            if (typeof usage.totalTokens === "number") span.setAttribute("llm.total_tokens", usage.totalTokens)
+          }
+          const finishReason = (event as any)?.finishReason
+          if (finishReason) span.setAttribute("llm.finish_reason", String(finishReason))
+        } catch {}
+        endSpanOnStreamEnd()
       },
       async experimental_repairToolCall(failed) {
         const lower = failed.toolCall.toolName.toLowerCase()
@@ -329,7 +365,7 @@ export namespace LLM {
           sessionId: input.sessionID,
         },
       },
-    })
+    }))
   }
 
   function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {

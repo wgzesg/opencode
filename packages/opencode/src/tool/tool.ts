@@ -1,5 +1,6 @@
 import z from "zod"
 import { Effect } from "effect"
+import { SpanStatusCode, context, trace } from "@opentelemetry/api"
 import type { MessageV2 } from "../session/message-v2"
 import type { Agent } from "../agent/agent"
 import type { Permission } from "../permission"
@@ -63,30 +64,54 @@ export namespace Tool {
       const toolInfo = init instanceof Function ? await init(initCtx) : { ...init }
       const execute = toolInfo.execute
       toolInfo.execute = async (args, ctx) => {
-        try {
-          toolInfo.parameters.parse(args)
-        } catch (error) {
-          if (error instanceof z.ZodError && toolInfo.formatValidationError) {
-            throw new Error(toolInfo.formatValidationError(error), { cause: error })
-          }
-          throw new Error(
-            `The ${id} tool was called with invalid arguments: ${error}.\nPlease rewrite the input so it satisfies the expected schema.`,
-            { cause: error },
-          )
-        }
-        const result = await execute(args, ctx)
-        if (result.metadata.truncated !== undefined) {
-          return result
-        }
-        const truncated = await Truncate.output(result.output, {}, initCtx?.agent)
-        return {
-          ...result,
-          output: truncated.content,
-          metadata: {
-            ...result.metadata,
-            truncated: truncated.truncated,
-            ...(truncated.truncated && { outputPath: truncated.outputPath }),
+        const tracer = trace.getTracer("opencode.tool")
+        const span = tracer.startSpan(`tool.${id}`, {
+          attributes: {
+            "tool.name": id,
+            "session.id": ctx.sessionID,
+            "message.id": ctx.messageID,
+            "agent.name": ctx.agent,
+            ...(ctx.callID ? { "tool.call_id": ctx.callID } : {}),
           },
+        })
+        const activeCtx = trace.setSpan(context.active(), span)
+        try {
+          return await context.with(activeCtx, async () => {
+            try {
+              toolInfo.parameters.parse(args)
+            } catch (error) {
+              if (error instanceof z.ZodError && toolInfo.formatValidationError) {
+                throw new Error(toolInfo.formatValidationError(error), { cause: error })
+              }
+              throw new Error(
+                `The ${id} tool was called with invalid arguments: ${error}.\nPlease rewrite the input so it satisfies the expected schema.`,
+                { cause: error },
+              )
+            }
+            const result = await execute(args, ctx)
+            if (result.title) span.setAttribute("tool.result_title", String(result.title))
+            if (result.metadata?.truncated !== undefined) span.setAttribute("tool.truncated", !!result.metadata.truncated)
+            if (result.metadata.truncated !== undefined) {
+              return result
+            }
+            const truncated = await Truncate.output(result.output, {}, initCtx?.agent)
+            span.setAttribute("tool.truncated", !!truncated.truncated)
+            return {
+              ...result,
+              output: truncated.content,
+              metadata: {
+                ...result.metadata,
+                truncated: truncated.truncated,
+                ...(truncated.truncated && { outputPath: truncated.outputPath }),
+              },
+            }
+          })
+        } catch (err) {
+          span.recordException(err as Error)
+          span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error)?.message ?? String(err) })
+          throw err
+        } finally {
+          span.end()
         }
       }
       return toolInfo
