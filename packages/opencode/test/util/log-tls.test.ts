@@ -1,4 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
+import { LogTls as LogTlsStatic } from "../../src/util/log-tls"
+import { Log } from "../../src/util/log"
 
 const REQUIRED_ENV = [
   "VOLCENGINE_ACCESS_KEY_ID",
@@ -46,5 +48,46 @@ describe("LogTls (disabled)", () => {
     process.env.OPENCODE_TLS_DISABLED = "1"
     const { LogTls } = await import(`../../src/util/log-tls?t=${Date.now()}`)
     expect(LogTls.isEnabled()).toBe(false)
+  })
+})
+
+describe("LogTls enqueue from Log.create", () => {
+  const saved: Record<string, string | undefined> = {}
+
+  beforeEach(() => {
+    clearEnv(saved)
+    process.env.VOLCENGINE_ACCESS_KEY_ID = "k"
+    process.env.VOLCENGINE_ACCESS_KEY_SECRET = "s"
+    process.env.VOLCENGINE_ENDPOINT = "tls-cn-beijing.volces.com"
+    process.env.VOLCENGINE_REGION = "cn-beijing"
+    process.env.OPENCODE_TLS_TOPIC_ID = "topic-1"
+  })
+  afterEach(() => restoreEnv(saved))
+
+  test("Log.info enqueues a record with sessionID from withSession", () => {
+    LogTlsStatic.reinitForTest()
+    LogTlsStatic.drainForTest()
+    const log = Log.create({ service: "wiring-test" })
+    Log.withSession("ses_42", () => {
+      log.info("msg-under-test", { k: "v" })
+    })
+    const records = LogTlsStatic.drainForTest()
+    const rec = records.find((r: any) => r.message === "msg-under-test")
+    expect(rec).toBeDefined()
+    if (!rec) return
+    expect(rec.level).toBe("INFO")
+    expect(rec.tags.sessionID).toBe("ses_42")
+    expect(rec.tags.service).toBe("wiring-test")
+    expect(rec.tags.k).toBe("v")
+  })
+
+  test("Log.error enqueues with level=ERROR", () => {
+    LogTlsStatic.reinitForTest()
+    LogTlsStatic.drainForTest()
+    const log = Log.create({ service: "wiring-test-err" })
+    log.error("boom")
+    const records = LogTlsStatic.drainForTest()
+    const rec = records.find((r: any) => r.message === "boom")
+    expect(rec?.level).toBe("ERROR")
   })
 })

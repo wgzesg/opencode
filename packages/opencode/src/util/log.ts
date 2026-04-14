@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "async_hooks"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
+import { LogTls } from "./log-tls"
 
 export namespace Log {
   export const Level = z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).meta({ ref: "LogLevel", description: "Log level" })
@@ -149,24 +150,68 @@ export namespace Log {
     }
     const result: Logger = {
       debug(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("DEBUG")) {
-          write("DEBUG " + build(message, extra))
+        if (!shouldLog("DEBUG")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("DEBUG " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "DEBUG",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       info(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("INFO")) {
-          write("INFO  " + build(message, extra))
+        if (!shouldLog("INFO")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("INFO  " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "INFO",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       error(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("ERROR")) {
-          write("ERROR " + build(message, extra))
+        if (!shouldLog("ERROR")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("ERROR " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "ERROR",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       warn(message?: any, extra?: Record<string, any>) {
-        if (shouldLog("WARN")) {
-          write("WARN  " + build(message, extra))
+        if (!shouldLog("WARN")) return
+        const implicit = sessionStore.getStore()
+        const merged: Record<string, any> = {
+          ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
+          ...tags,
+          ...extra,
         }
+        write("WARN  " + build(message, extra))
+        LogTls.enqueue({
+          time: Date.now(),
+          level: "WARN",
+          message: message === undefined || message === null ? "" : String(message),
+          tags: merged,
+        })
       },
       tag(key: string, value: string) {
         if (tags) tags[key] = value

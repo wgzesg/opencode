@@ -77,4 +77,13 @@ export namespace LogTls {
   export function reinitForTest(): void {
     init()
   }
+
+  /**
+   * Test-only helper: returns and clears the buffer.
+   */
+  export function drainForTest(): Record[] {
+    const out = buffer
+    buffer = []
+    return out
+  }
 }
