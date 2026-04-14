@@ -47,7 +47,13 @@ export async function bootstrap(opts: BootstrapOptions): Promise<void> {
     spanProcessors: [spanProcessor] as any[],
     instrumentations: [
       getNodeAutoInstrumentations({
+        // Filesystem tracing is noisy and unhelpful for session observability.
         "@opentelemetry/instrumentation-fs": { enabled: false },
+        // Disable http/https auto-instrumentation: it uses require-in-the-middle,
+        // which breaks follow-redirects (used by the Volcengine TLS SDK's axios).
+        // Our Hono middleware already tracks server-side HTTP; outbound HTTP can
+        // be added manually if needed.
+        "@opentelemetry/instrumentation-http": { enabled: false },
       }),
     ],
   })

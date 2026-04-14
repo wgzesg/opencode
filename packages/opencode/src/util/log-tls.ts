@@ -169,7 +169,12 @@ export namespace LogTls {
       await flusher(batch)
     } catch (err) {
       failedBatches++
-      throttledWarn(`PutLogs failed: ${(err as Error)?.message ?? String(err)} (failed batches: ${failedBatches})`)
+      const msg = (err as Error)?.message ?? String(err)
+      const stack = (err as Error)?.stack
+      if (failedBatches === 1) {
+        process.stderr.write(`WARN  [LogTls] first PutLogs failure: ${msg}\n${stack ?? ""}\n`)
+      }
+      throttledWarn(`PutLogs failed: ${msg} (failed batches: ${failedBatches})`)
     } finally {
       inFlight = false
     }
