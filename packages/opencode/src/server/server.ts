@@ -19,6 +19,7 @@ import { lazy } from "@/util/lazy"
 import { errorHandler } from "./middleware"
 import { InstanceRoutes } from "./instance"
 import { initProjectors } from "./projectors"
+import { tracingMiddleware } from "../telemetry/http-middleware"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -47,6 +48,7 @@ export namespace Server {
   export function ControlPlaneRoutes(upgrade: UpgradeWebSocket, app = new Hono(), opts?: { cors?: string[] }): Hono {
     return app
       .onError(errorHandler(log))
+      .use(tracingMiddleware())
       .use((c, next) => {
         // Allow CORS preflight requests to succeed without auth.
         // Browser clients sending Authorization headers will preflight with OPTIONS.
