@@ -78,21 +78,32 @@ export namespace Log {
         process.stderr.write(msg)
         return msg.length
       }
-      return
-    }
-    logpath = path.join(
-      Global.Path.log,
-      options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
-    )
-    await fs.truncate(logpath).catch(() => {})
-    const stream = createWriteStream(logpath, { flags: "a" })
-    write = async (msg: any) => {
-      return new Promise((resolve, reject) => {
-        stream.write(msg, (err) => {
-          if (err) reject(err)
-          else resolve(msg.length)
+    } else {
+      logpath = path.join(
+        Global.Path.log,
+        options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
+      )
+      await fs.truncate(logpath).catch(() => {})
+      const stream = createWriteStream(logpath, { flags: "a" })
+      write = async (msg: any) => {
+        return new Promise((resolve, reject) => {
+          stream.write(msg, (err) => {
+            if (err) reject(err)
+            else resolve(msg.length)
+          })
         })
+      }
+    }
+    if (LogTls.isEnabled()) {
+      Default.info("log-tls", {
+        status: "enabled",
+        endpoint: process.env.VOLCENGINE_ENDPOINT,
+        topic: process.env.OPENCODE_TLS_TOPIC_ID,
       })
+    } else if (process.env.OPENCODE_TLS_DISABLED === "1" || process.env.OPENCODE_TLS_DISABLED === "true") {
+      Default.info("log-tls", { status: "disabled-by-env" })
+    } else if (process.env.VOLCENGINE_ACCESS_KEY_ID || process.env.OPENCODE_TLS_TOPIC_ID) {
+      Default.info("log-tls", { status: "disabled-missing-env" })
     }
   }
 

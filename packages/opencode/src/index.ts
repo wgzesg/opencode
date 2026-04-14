@@ -3,6 +3,7 @@ import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
+import { LogTls } from "./util/log-tls"
 import { ConsoleCommand } from "./cli/cmd/account"
 import { ProvidersCommand } from "./cli/cmd/providers"
 import { AgentCommand } from "./cli/cmd/agent"
@@ -95,6 +96,19 @@ const cli = yargs(args)
         if (Installation.isLocal()) return "DEBUG"
         return "INFO"
       })(),
+    })
+
+    const __logTlsShutdown = async () => {
+      try { await LogTls.shutdown(2000) } catch {}
+    }
+    process.on("beforeExit", __logTlsShutdown)
+    process.on("SIGINT", async () => {
+      await __logTlsShutdown()
+      process.exit(130)
+    })
+    process.on("SIGTERM", async () => {
+      await __logTlsShutdown()
+      process.exit(143)
     })
 
     Heap.start()
