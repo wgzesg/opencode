@@ -703,9 +703,11 @@ export namespace Session {
       })
       .optional(),
     (input) =>
-      withSpan("opencode.session", "session.create", { "parent.session.id": input?.parentID ?? "" }, () =>
-        runPromise((svc) => svc.create(input)),
-      ),
+      withSpan("opencode.session", "session.create", { "parent.session.id": input?.parentID ?? "" }, async (span) => {
+        const result = await runPromise((svc) => svc.create(input))
+        if ((result as any)?.id) span.setAttribute("session.id", (result as any).id)
+        return result
+      }),
   )
 
   export const fork = fn(z.object({ sessionID: SessionID.zod, messageID: MessageID.zod.optional() }), (input) =>
@@ -713,7 +715,11 @@ export namespace Session {
       "opencode.session",
       "session.fork",
       { "source.session.id": input.sessionID },
-      () => runPromise((svc) => svc.fork(input)),
+      async (span) => {
+        const result = await runPromise((svc) => svc.fork(input))
+        if ((result as any)?.id) span.setAttribute("session.id", (result as any).id)
+        return result
+      },
     ),
   )
 
