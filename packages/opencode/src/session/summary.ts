@@ -1,6 +1,7 @@
 import z from "zod"
 import { Effect, Layer, ServiceMap } from "effect"
 import { makeRuntime } from "@/effect/run-service"
+import { withSpan } from "../telemetry/span"
 import { Bus } from "@/bus"
 import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
@@ -164,7 +165,9 @@ export namespace SessionSummary {
   const { runPromise } = makeRuntime(Service, defaultLayer)
 
   export const summarize = (input: { sessionID: SessionID; messageID: MessageID }) =>
-    void runPromise((svc) => svc.summarize(input)).catch(() => {})
+    void withSpan("opencode.session", "session.summary", { "session.id": input.sessionID }, () =>
+      runPromise((svc) => svc.summarize(input)),
+    ).catch(() => {})
 
   export const DiffInput = z.object({
     sessionID: SessionID.zod,

@@ -50,6 +50,7 @@ import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Layer, Option, Scope, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
+import { withSpan } from "../telemetry/span"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1807,7 +1808,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
   export type PromptInput = z.infer<typeof PromptInput>
 
   export async function prompt(input: PromptInput) {
-    return runPromise((svc) => svc.prompt(PromptInput.parse(input)))
+    const parsed = PromptInput.parse(input)
+    return withSpan(
+      "opencode.session",
+      "session.prompt.body",
+      {
+        "session.id": parsed.sessionID,
+        ...(parsed.agent ? { "agent.name": parsed.agent } : {}),
+        "message.count": parsed.parts.length,
+      },
+      () => runPromise((svc) => svc.prompt(parsed)),
+    )
   }
 
   export async function resolvePromptParts(template: string) {
@@ -1815,7 +1826,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
   }
 
   export async function cancel(sessionID: SessionID) {
-    return runPromise((svc) => svc.cancel(SessionID.zod.parse(sessionID)))
+    const id = SessionID.zod.parse(sessionID)
+    return withSpan("opencode.session", "session.prompt.cancel", { "session.id": id }, () =>
+      runPromise((svc) => svc.cancel(id)),
+    )
   }
 
   export const LoopInput = z.object({
@@ -1868,7 +1882,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
   export type CommandInput = z.infer<typeof CommandInput>
 
   export async function command(input: CommandInput) {
-    return runPromise((svc) => svc.command(CommandInput.parse(input)))
+    const parsed = CommandInput.parse(input)
+    return withSpan(
+      "opencode.session",
+      "session.command",
+      { "session.id": parsed.sessionID, "command.name": parsed.command },
+      () => runPromise((svc) => svc.command(parsed)),
+    )
   }
 
   /** @internal Exported for testing */

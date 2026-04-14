@@ -8,6 +8,7 @@ import { type ProviderMetadata } from "ai"
 import { Config } from "../config/config"
 import { Flag } from "../flag/flag"
 import { Installation } from "../installation"
+import { withSpan } from "../telemetry/span"
 
 import { Database, NotFoundError, eq, and, gte, isNull, desc, like, inArray, lt } from "../storage/db"
 import { SyncEvent } from "../sync"
@@ -701,24 +702,38 @@ export namespace Session {
         workspaceID: WorkspaceID.zod.optional(),
       })
       .optional(),
-    (input) => runPromise((svc) => svc.create(input)),
+    (input) =>
+      withSpan("opencode.session", "session.create", { "parent.session.id": input?.parentID ?? "" }, () =>
+        runPromise((svc) => svc.create(input)),
+      ),
   )
 
   export const fork = fn(z.object({ sessionID: SessionID.zod, messageID: MessageID.zod.optional() }), (input) =>
-    runPromise((svc) => svc.fork(input)),
+    withSpan(
+      "opencode.session",
+      "session.fork",
+      { "source.session.id": input.sessionID },
+      () => runPromise((svc) => svc.fork(input)),
+    ),
   )
 
   export const touch = fn(SessionID.zod, (id) => runPromise((svc) => svc.touch(id)))
   export const get = fn(SessionID.zod, (id) => runPromise((svc) => svc.get(id)))
-  export const share = fn(SessionID.zod, (id) => runPromise((svc) => svc.share(id)))
+  export const share = fn(SessionID.zod, (id) =>
+    withSpan("opencode.session", "session.share", { "session.id": id }, () => runPromise((svc) => svc.share(id))),
+  )
   export const unshare = fn(SessionID.zod, (id) => runPromise((svc) => svc.unshare(id)))
 
   export const setTitle = fn(z.object({ sessionID: SessionID.zod, title: z.string() }), (input) =>
-    runPromise((svc) => svc.setTitle(input)),
+    withSpan("opencode.session", "session.set_title", { "session.id": input.sessionID }, () =>
+      runPromise((svc) => svc.setTitle(input)),
+    ),
   )
 
   export const setArchived = fn(z.object({ sessionID: SessionID.zod, time: z.number().optional() }), (input) =>
-    runPromise((svc) => svc.setArchived(input)),
+    withSpan("opencode.session", "session.set_archived", { "session.id": input.sessionID }, () =>
+      runPromise((svc) => svc.setArchived(input)),
+    ),
   )
 
   export const setPermission = fn(z.object({ sessionID: SessionID.zod, permission: Permission.Ruleset }), (input) =>
@@ -856,7 +871,9 @@ export namespace Session {
   }
 
   export const children = fn(SessionID.zod, (id) => runPromise((svc) => svc.children(id)))
-  export const remove = fn(SessionID.zod, (id) => runPromise((svc) => svc.remove(id)))
+  export const remove = fn(SessionID.zod, (id) =>
+    withSpan("opencode.session", "session.remove", { "session.id": id }, () => runPromise((svc) => svc.remove(id))),
+  )
   export async function updateMessage<T extends MessageV2.Info>(msg: T): Promise<T> {
     MessageV2.Info.parse(msg)
     return runPromise((svc) => svc.updateMessage(msg))
@@ -889,6 +906,9 @@ export namespace Session {
 
   export const initialize = fn(
     z.object({ sessionID: SessionID.zod, modelID: ModelID.zod, providerID: ProviderID.zod, messageID: MessageID.zod }),
-    (input) => runPromise((svc) => svc.initialize(input)),
+    (input) =>
+      withSpan("opencode.session", "session.initialize", { "session.id": input.sessionID }, () =>
+        runPromise((svc) => svc.initialize(input)),
+      ),
   )
 }

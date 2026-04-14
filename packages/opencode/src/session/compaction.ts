@@ -1,5 +1,6 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
+import { withSpan } from "../telemetry/span"
 import { Session } from "."
 import { SessionID, MessageID, PartID } from "./schema"
 import { Instance } from "../project/instance"
@@ -412,7 +413,16 @@ When constructing the summary, try to stick to this template:
       auto: z.boolean(),
       overflow: z.boolean().optional(),
     }),
-    (input) => runPromise((svc) => svc.process(input)),
+    (input) =>
+      withSpan(
+        "opencode.session",
+        "session.compact",
+        {
+          "session.id": input.sessionID,
+          "compaction.reason": input.overflow ? "overflow" : input.auto ? "auto" : "manual",
+        },
+        () => runPromise((svc) => svc.process(input)),
+      ),
   )
 
   export const create = fn(
@@ -423,6 +433,16 @@ When constructing the summary, try to stick to this template:
       auto: z.boolean(),
       overflow: z.boolean().optional(),
     }),
-    (input) => runPromise((svc) => svc.create(input)),
+    (input) =>
+      withSpan(
+        "opencode.session",
+        "session.compact",
+        {
+          "session.id": input.sessionID,
+          "compaction.reason": input.overflow ? "overflow" : input.auto ? "auto" : "manual",
+          "agent.name": input.agent,
+        },
+        () => runPromise((svc) => svc.create(input)),
+      ),
   )
 }
