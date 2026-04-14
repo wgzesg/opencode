@@ -32,7 +32,42 @@ export namespace LogTls {
   let lastWarnAt = 0
   const WARN_INTERVAL_MS = 60_000
 
-  let flusher: Flusher = async () => {}
+  async function volcengineFlusher(records: Record[]): Promise<void> {
+    if (!config) return
+    const { tlsOpenapi } = await import("@volcengine/openapi")
+    process.env.VOLCENGINE_ACCESS_KEY_ID = config.accessKeyId
+    process.env.VOLCENGINE_ACCESS_KEY_SECRET = config.accessKeySecret
+    process.env.VOLCENGINE_ENDPOINT = config.endpoint
+    process.env.VOLCENGINE_REGION = config.region
+    const svc = tlsOpenapi.defaultService
+    const logBuffer = await tlsOpenapi.TlsService.objToProtoBuffer({
+      LogGroups: [
+        {
+          Source: config.source,
+          LogTags: [],
+          FileName: "",
+          Logs: records.map((r) => ({
+            Time: Math.floor(r.time / 1000),
+            Contents: [
+              { Key: "level", Value: r.level },
+              { Key: "message", Value: r.message },
+              ...Object.entries(r.tags).map(([k, v]) => ({
+                Key: k,
+                Value: typeof v === "string" ? v : JSON.stringify(v),
+              })),
+            ],
+          })),
+        },
+      ],
+    })
+    await svc.PutLogs({
+      TopicId: config.topicId,
+      CompressType: "lz4",
+      LogGroupList: Buffer.from(logBuffer),
+    })
+  }
+
+  let flusher: Flusher = (records) => volcengineFlusher(records)
   let warnHook: (msg: string) => void = (msg) => process.stderr.write("WARN  [LogTls] " + msg + "\n")
 
   function readConfig(): Config | undefined {
