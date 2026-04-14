@@ -1,6 +1,7 @@
 import path from "path"
 import fs from "fs/promises"
 import { createWriteStream } from "fs"
+import { AsyncLocalStorage } from "async_hooks"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
@@ -40,6 +41,16 @@ export namespace Log {
 
   const loggers = new Map<string, Logger>()
 
+  const sessionStore = new AsyncLocalStorage<{ sessionID: string }>()
+
+  export function withSession<T>(sessionID: string, fn: () => T): T {
+    return sessionStore.run({ sessionID }, fn)
+  }
+
+  export function currentSessionID(): string | undefined {
+    return sessionStore.getStore()?.sessionID
+  }
+
   export const Default = create({ service: "default" })
 
   export interface Options {
@@ -60,7 +71,14 @@ export namespace Log {
   export async function init(options: Options) {
     if (options.level) level = options.level
     cleanup(Global.Path.log)
-    if (options.print) return
+    if (options.print) {
+      logpath = ""
+      write = (msg: any) => {
+        process.stderr.write(msg)
+        return msg.length
+      }
+      return
+    }
     logpath = path.join(
       Global.Path.log,
       options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
@@ -109,10 +127,13 @@ export namespace Log {
     }
 
     function build(message: any, extra?: Record<string, any>) {
-      const prefix = Object.entries({
+      const implicit = sessionStore.getStore()
+      const merged: Record<string, any> = {
+        ...(implicit?.sessionID ? { sessionID: implicit.sessionID } : {}),
         ...tags,
         ...extra,
-      })
+      }
+      const prefix = Object.entries(merged)
         .filter(([_, value]) => value !== undefined && value !== null)
         .map(([key, value]) => {
           const prefix = `${key}=`
