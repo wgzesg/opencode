@@ -30,6 +30,11 @@ export function tracingMiddleware(): MiddlewareHandler {
       const status = c.res.status
       span.setAttribute("http.status_code", status)
 
+      const sessionId = c.req.param("sessionID")
+      if (sessionId) span.setAttribute("session.id", sessionId)
+      const workspaceId = c.req.query("workspace") ?? c.req.header("x-opencode-workspace")
+      if (workspaceId) span.setAttribute("workspace.id", workspaceId)
+
       // If Hono's onError handler caught an exception from a downstream handler,
       // it sets c.error. Record it even though next() resolved normally.
       if (c.error) {
