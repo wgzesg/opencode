@@ -37,6 +37,11 @@ export namespace TelemetryPreflight {
     serviceName?: string
     sampleRatio?: number
     enabled?: boolean
+    // Volcengine TLS auth (when provider === "volcengine.tls")
+    accessKeyId?: string
+    accessKeySecret?: string
+    topicId?: string
+    region?: string
   }
 
   export interface Telemetry {

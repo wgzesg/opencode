@@ -1,4 +1,4 @@
-import { trace } from "@opentelemetry/api"
+import { trace, diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
@@ -16,6 +16,10 @@ export interface BootstrapOptions {
   enabled: boolean
   serviceName: string
   sampleRatio: number
+  /** Full OTLP HTTP traces URL (e.g. 'https://tls-cn-beijing.volces.com:4318/v1/traces'). */
+  url?: string
+  /** Extra headers for the OTLP HTTP exporter (e.g. Volcengine TLS auth headers). */
+  headers?: Record<string, string>
   /** Optional exporter override — used in tests. */
   exporter?: SpanExporter
 }
@@ -26,7 +30,27 @@ export async function bootstrap(opts: BootstrapOptions): Promise<void> {
   if (!opts.enabled) return
   if (sdk) return
 
-  const exporter = opts.exporter ?? new OTLPTraceExporter()
+  // Surface OTel internal warnings/errors (export failures, auth rejects)
+  // to stderr. Opt into verbose/debug via OPENCODE_OTEL_LOG=debug|verbose.
+  const lvl = (process.env["OPENCODE_OTEL_LOG"] ?? "").toLowerCase()
+  const diagLevel =
+    lvl === "verbose" ? DiagLogLevel.VERBOSE
+    : lvl === "debug" ? DiagLogLevel.DEBUG
+    : lvl === "info" ? DiagLogLevel.INFO
+    : DiagLogLevel.WARN
+  diag.setLogger(new DiagConsoleLogger(), diagLevel)
+
+  const endpointSummary = opts.url ?? process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "(default)"
+  process.stderr.write(
+    `INFO  [otel] bootstrap service=${opts.serviceName} endpoint=${endpointSummary} sampleRatio=${opts.sampleRatio} authHeaders=${opts.headers ? Object.keys(opts.headers).join(",") : "none"}\n`,
+  )
+
+  const exporter =
+    opts.exporter ??
+    new OTLPTraceExporter({
+      ...(opts.url ? { url: opts.url } : {}),
+      ...(opts.headers ? { headers: opts.headers } : {}),
+    })
 
   // Use SimpleSpanProcessor for test exporters (no batching delay);
   // BatchSpanProcessor for production to minimise export overhead.

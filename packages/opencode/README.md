@@ -47,6 +47,33 @@ Both sinks are optional. Configure them via `opencode.json` (hybrid provider-bas
 
 Config lookup order (higher wins): project `opencode.json` → `$OPENCODE_CONFIG_DIR/opencode.json` → `~/.config/opencode/opencode.json` → `~/.opencode/opencode.json`. Inside each block, any missing field falls back to the corresponding environment variable.
 
+### Trace exporter providers
+
+Three modes, selected by `telemetry.traces.provider` (and `enabled`):
+
+1. **Disabled** — omit the `traces` block, or set `"enabled": false`. No OTel SDK is bootstrapped.
+2. **Local / generic OTLP HTTP** — `"provider": "otlp-http"`. Plain unauthenticated OTLP to `endpoint` (e.g. Jaeger all-in-one at `http://localhost:4318`).
+3. **Volcengine TLS trace topic** — `"provider": "volcengine.tls"`. Ships OTLP spans directly to a TLS Trace instance using the documented `x-tls-otel-*` HTTP headers. First create a Trace instance in the TLS console (it auto-creates the backing log topic). Then:
+
+   ```json
+   "traces": {
+     "provider": "volcengine.tls",
+     "enabled": true,
+     "endpoint": "tls-cn-beijing.volces.com",
+     "region": "cn-beijing",
+     "topicId": "<trace topic id from the console>",
+     "accessKeyId": "AKLT...",
+     "accessKeySecret": "...",
+     "serviceName": "opencode",
+     "sampleRatio": 1
+   }
+   ```
+
+   Notes:
+   - `endpoint` is the bare host (no scheme, no port). The exporter POSTs to `https://<endpoint>:4318/v1/traces`.
+   - Traces carry their own `accessKeyId` / `accessKeySecret` / `region` / `topicId`; the logs block is never used as a fallback, since a TLS Trace instance may live under a different AK/SK or region than the log topic.
+   - Query traces in the console with e.g. `* | select * where TraceID = '...'`.
+
 ### Environment variable fallback
 
 Logs (Volcengine TLS):

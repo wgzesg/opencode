@@ -1032,11 +1032,18 @@ export namespace Config {
             .optional(),
           traces: z
             .object({
-              provider: z.string().optional().describe("Trace exporter provider id (e.g. 'otlp-http')"),
+              provider: z
+                .string()
+                .optional()
+                .describe("Trace exporter provider id ('otlp-http' or 'volcengine.tls')"),
               enabled: z.boolean().optional(),
               endpoint: z.string().optional(),
               serviceName: z.string().optional(),
               sampleRatio: z.number().min(0).max(1).optional(),
+              accessKeyId: z.string().optional().describe("Volcengine TLS AK (provider 'volcengine.tls')"),
+              accessKeySecret: z.string().optional().describe("Volcengine TLS SK (provider 'volcengine.tls')"),
+              topicId: z.string().optional().describe("Volcengine TLS trace topic ID"),
+              region: z.string().optional().describe("Volcengine TLS region (e.g. 'cn-beijing')"),
             })
             .optional(),
         })
