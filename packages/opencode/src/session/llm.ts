@@ -1,6 +1,7 @@
 import { Provider } from "@/provider/provider"
 import { Log } from "@/util/log"
 import { SpanStatusCode, context, trace } from "@opentelemetry/api"
+import { redactMessages, setPayload } from "@/telemetry/payload"
 import { Cause, Effect, Layer, Record, ServiceMap } from "effect"
 import * as Queue from "effect/Queue"
 import * as Stream from "effect/Stream"
@@ -182,6 +183,8 @@ export namespace LLM {
             ...input.messages,
           ]
 
+    setPayload(span, "llm.input", redactMessages(messages))
+
     const params = await Plugin.trigger(
       "chat.params",
       {
@@ -292,6 +295,17 @@ export namespace LLM {
           }
           const finishReason = (event as any)?.finishReason
           if (finishReason) span.setAttribute("llm.finish_reason", String(finishReason))
+          const text = (event as any)?.text
+          if (typeof text === "string" && text.length > 0) setPayload(span, "llm.output_text", text)
+          const toolCalls = (event as any)?.toolCalls
+          if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+            span.setAttribute("llm.tool_call_count", toolCalls.length)
+            setPayload(
+              span,
+              "llm.tool_calls",
+              toolCalls.map((c: any) => ({ name: c?.toolName, input: c?.input ?? c?.args })),
+            )
+          }
         } catch {}
         endSpanOnStreamEnd()
       },

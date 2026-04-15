@@ -1,6 +1,7 @@
 import z from "zod"
 import { Effect } from "effect"
 import { SpanStatusCode, context, trace } from "@opentelemetry/api"
+import { setPayload } from "../telemetry/payload"
 import type { MessageV2 } from "../session/message-v2"
 import type { Agent } from "../agent/agent"
 import type { Permission } from "../permission"
@@ -88,14 +89,17 @@ export namespace Tool {
                 { cause: error },
               )
             }
+            setPayload(span, "tool.input", args)
             const result = await execute(args, ctx)
             if (result.title) span.setAttribute("tool.result_title", String(result.title))
             if (result.metadata?.truncated !== undefined) span.setAttribute("tool.truncated", !!result.metadata.truncated)
             if (result.metadata.truncated !== undefined) {
+              setPayload(span, "tool.output", result.output)
               return result
             }
             const truncated = await Truncate.output(result.output, {}, initCtx?.agent)
             span.setAttribute("tool.truncated", !!truncated.truncated)
+            setPayload(span, "tool.output", truncated.content)
             return {
               ...result,
               output: truncated.content,

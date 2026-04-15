@@ -17,6 +17,7 @@ import { Instance } from "../project/instance"
 import { Installation } from "../installation"
 import { withTimeout } from "@/util/timeout"
 import { withSpan } from "@/telemetry/span"
+import { setPayload } from "@/telemetry/payload"
 import { AppFileSystem } from "@/filesystem"
 import { McpOAuthProvider } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
@@ -150,8 +151,9 @@ export namespace MCP {
           "opencode.mcp",
           `mcp.call_tool.${sanitize(mcpTool.name)}`,
           { "tool.name": mcpTool.name, "tool.provider": "mcp" },
-          () =>
-            client.callTool(
+          async (span) => {
+            setPayload(span, "tool.input", args)
+            const result = await client.callTool(
               {
                 name: mcpTool.name,
                 arguments: (args || {}) as Record<string, unknown>,
@@ -161,7 +163,10 @@ export namespace MCP {
                 resetTimeoutOnProgress: true,
                 timeout,
               },
-            ),
+            )
+            setPayload(span, "tool.output", result)
+            return result
+          },
         )
       },
     })
