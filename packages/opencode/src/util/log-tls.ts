@@ -32,6 +32,32 @@ export namespace LogTls {
   let lastWarnAt = 0
   const WARN_INTERVAL_MS = 60_000
 
+  // tls.proto is not bundled by `bun build --compile` (only JS modules are),
+  // so the SDK's `protobuf.load(path.join(__dirname, "./tls.proto"))` call
+  // finds no types when run from the compiled binary. Embed the schema as a
+  // text import and replace the serializer with one that uses the in-memory
+  // root.
+  let tlsObjToProtoBuffer: ((obj: unknown) => Promise<Uint8Array>) | undefined
+  async function buildTlsSerializer() {
+    if (tlsObjToProtoBuffer) return tlsObjToProtoBuffer
+    // @ts-expect-error — Bun "with { type: 'text' }" import attribute is not
+    // in stock tsc types. At runtime Bun returns { default: <file contents> }.
+    const mod = await import("@volcengine/openapi/lib/services/tls/tls.proto", { with: { type: "text" } })
+    const tlsProtoSource: string = (mod as any).default ?? (mod as any)
+    // protobufjs is a transitive dep of @volcengine/openapi; bypass the type
+    // resolver since it's not declared in our package.json.
+    const protobuf: any = require("protobufjs")
+    const { root } = protobuf.parse(tlsProtoSource)
+    const type = root.lookupType("pb.LogGroupList")
+    tlsObjToProtoBuffer = async (obj: unknown) => {
+      const errMsg = type.verify(obj as object)
+      if (errMsg) throw new Error(errMsg)
+      const message = type.create(obj as object)
+      return type.encode(message).finish()
+    }
+    return tlsObjToProtoBuffer
+  }
+
   async function volcengineFlusher(records: Record[]): Promise<void> {
     if (!config) return
     const { tlsOpenapi } = await import("@volcengine/openapi")
@@ -41,7 +67,8 @@ export namespace LogTls {
     svc.setHost(config.endpoint.replace(/^https?:\/\//, ""))
     svc.setRegion(config.region)
     svc.setProtocol("https:")
-    const logBuffer = await tlsOpenapi.TlsService.objToProtoBuffer({
+    const serialize = await buildTlsSerializer()
+    const logBuffer = await serialize({
       LogGroups: [
         {
           Source: config.source,
