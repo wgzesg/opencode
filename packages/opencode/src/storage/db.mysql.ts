@@ -136,6 +136,16 @@ export async function init(url: string) {
     // already validated for the Postgres backend.
     supportBigNumbers: true,
     bigNumberStrings: false,
+    // Avoid ETIMEDOUT on idle connections: enable TCP keep-alive and set a
+    // connect timeout so stale connections are detected early.
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+    connectTimeout: 10000,
+    // Limit idle connections and evict them before the server's wait_timeout
+    // closes them, preventing the pool from handing out dead connections.
+    waitForConnections: true,
+    connectionLimit: 10,
+    idleTimeout: 60000,
   })
 
   const db = drizzle({ client: connection, mode: "default" })

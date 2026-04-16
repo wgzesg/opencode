@@ -65,20 +65,33 @@ export const SessionRoutes = lazy(() => {
             .meta({ description: "Filter sessions updated on or after this timestamp (milliseconds since epoch)" }),
           search: z.string().optional().meta({ description: "Filter sessions by title (case-insensitive)" }),
           limit: z.coerce.number().optional().meta({ description: "Maximum number of sessions to return" }),
+          offset: z.coerce.number().optional().meta({ description: "Number of sessions to skip for pagination" }),
         }),
       ),
       async (c) => {
         const query = c.req.valid("query")
-        const sessions: Session.Info[] = []
-        for await (const session of Session.list({
+        const filter = {
           directory: query.directory,
           roots: query.roots,
           start: query.start,
           search: query.search,
-          limit: query.limit,
-        })) {
-          sessions.push(session)
         }
+        const [sessions, total] = await Promise.all([
+          (async () => {
+            const items: Session.Info[] = []
+            for await (const session of Session.list({
+              ...filter,
+              limit: query.limit,
+              offset: query.offset,
+            })) {
+              items.push(session)
+            }
+            return items
+          })(),
+          Session.listCount(filter),
+        ])
+        c.header("Access-Control-Expose-Headers", "X-Total-Count")
+        c.header("X-Total-Count", total.toString())
         return c.json(sessions)
       },
     )

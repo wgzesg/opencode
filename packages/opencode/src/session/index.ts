@@ -10,7 +10,7 @@ import { Flag } from "../flag/flag"
 import { Installation } from "../installation"
 import { withSpan } from "../telemetry/span"
 
-import { Database, NotFoundError, eq, and, gte, isNull, desc, like, inArray, lt } from "../storage/db"
+import { Database, NotFoundError, eq, and, gte, isNull, desc, like, inArray, lt, count } from "../storage/db"
 import { SyncEvent } from "../sync"
 import type { SQL } from "../storage/db"
 import { SessionTable } from "./session.sql"
@@ -764,13 +764,12 @@ export namespace Session {
     runPromise((svc) => svc.messages(input)),
   )
 
-  export async function* list(input?: {
+  function listConditions(input?: {
     directory?: string
     workspaceID?: WorkspaceID
     roots?: boolean
     start?: number
     search?: string
-    limit?: number
   }) {
     const project = Instance.project
     const conditions = [eq(SessionTable.project_id, project.id)]
@@ -791,20 +790,57 @@ export namespace Session {
       conditions.push(like(SessionTable.title, `%${input.search}%`))
     }
 
-    const limit = input?.limit ?? 100
+    return conditions
+  }
 
-    const rows = await Database.use((db) =>
-      db
+  export async function* list(input?: {
+    directory?: string
+    workspaceID?: WorkspaceID
+    roots?: boolean
+    start?: number
+    search?: string
+    limit?: number
+    offset?: number
+  }) {
+    const conditions = listConditions(input)
+    const limit = input?.limit ?? 100
+    const offset = input?.offset ?? 0
+
+    const query = Database.use((db) => {
+      let q = db
         .select()
         .from(SessionTable)
         .where(and(...conditions))
         .orderBy(desc(SessionTable.time_updated))
         .limit(limit)
-        .all(),
-    )
+      if (offset > 0) {
+        q = q.offset(offset)
+      }
+      return q.all()
+    })
+
+    const rows = await query
     for (const row of rows) {
       yield fromRow(row)
     }
+  }
+
+  export async function listCount(input?: {
+    directory?: string
+    workspaceID?: WorkspaceID
+    roots?: boolean
+    start?: number
+    search?: string
+  }) {
+    const conditions = listConditions(input)
+    const result = await Database.use((db) =>
+      db
+        .select({ count: count() })
+        .from(SessionTable)
+        .where(and(...conditions))
+        .all(),
+    )
+    return result[0]?.count ?? 0
   }
 
   export async function* listGlobal(input?: {
