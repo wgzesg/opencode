@@ -807,16 +807,14 @@ export namespace Session {
     const offset = input?.offset ?? 0
 
     const query = Database.use((db) => {
-      let q = db
+      return db
         .select()
         .from(SessionTable)
         .where(and(...conditions))
         .orderBy(desc(SessionTable.time_updated))
         .limit(limit)
-      if (offset > 0) {
-        q = q.offset(offset)
-      }
-      return q.all()
+        .offset(offset)
+        .all()
     })
 
     const rows = await query
