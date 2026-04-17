@@ -127,15 +127,33 @@ export namespace SessionCompaction {
           }
         }
 
-        log.info("found", { pruned, total })
+        const toolNames = [...new Set(toPrune.map((p) => p.tool))].join(",")
+        log.info("prune scan complete", {
+          total_tokens: total,
+          pruned_tokens: pruned,
+          parts_count: toPrune.length,
+          tool_names: toolNames || "none",
+          will_prune: pruned > PRUNE_MINIMUM,
+        })
         if (pruned > PRUNE_MINIMUM) {
           for (const part of toPrune) {
             if (part.state.status === "completed") {
+              const estimate = Token.estimate(part.state.output)
+              log.info("pruning tool output", {
+                tool: part.tool,
+                callID: part.callID,
+                estimated_tokens: estimate,
+              })
               part.state.time.compacted = Date.now()
               yield* session.updatePart(part)
             }
           }
-          log.info("pruned", { count: toPrune.length })
+          log.info("prune applied", {
+            count: toPrune.length,
+            tokens_freed: pruned,
+            tokens_retained: total - pruned,
+            tools: toolNames,
+          })
         }
       })
 
@@ -151,6 +169,12 @@ export namespace SessionCompaction {
           throw new Error(`Compaction parent must be a user message: ${input.parentID}`)
         }
         const userMessage = parent.info
+        log.info("compaction starting", {
+          sessionID: input.sessionID,
+          messages_input: input.messages.length,
+          auto: input.auto,
+          overflow: input.overflow ?? false,
+        })
 
         let messages = input.messages
         let replay:
@@ -273,6 +297,10 @@ When constructing the summary, try to stick to this template:
           .pipe(Effect.onInterrupt(() => processor.abort()))
 
         if (result === "compact") {
+          log.info("compaction cascade overflow", {
+            sessionID: input.sessionID,
+            has_replay: Boolean(replay),
+          })
           processor.message.error = new MessageV2.ContextOverflowError({
             message: replay
               ? "Conversation history too large to compact - exceeds model context limit"
@@ -342,7 +370,16 @@ When constructing the summary, try to stick to this template:
           }
         }
 
-        if (processor.message.error) return "stop"
+        if (processor.message.error) {
+          log.info("compaction finished with error", { sessionID: input.sessionID })
+          return "stop"
+        }
+        log.info("compaction finished", {
+          sessionID: input.sessionID,
+          result,
+          has_replay: Boolean(replay),
+          model: model.id,
+        })
         if (result === "continue") yield* bus.publish(Event.Compacted, { sessionID: input.sessionID })
         return result
       })

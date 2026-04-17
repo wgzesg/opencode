@@ -103,6 +103,15 @@ export namespace Truncate {
         const preview = out.join("\n")
         const file = path.join(TRUNCATION_DIR, ToolID.ascending())
 
+        log.info("tool output truncated", {
+          original_lines: lines.length,
+          final_lines: out.length,
+          original_bytes: totalBytes,
+          final_bytes: bytes,
+          direction,
+          output_path: file,
+        })
+
         yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
         yield* fs.writeFileString(file, text).pipe(Effect.orDie)
 

@@ -51,6 +51,7 @@ import { Cause, Effect, Exit, Layer, Option, Scope, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
 import { withSpan } from "../telemetry/span"
+import { trace, SpanStatusCode, type Span } from "@opentelemetry/api"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1335,18 +1336,32 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           throw new Error("Impossible")
         })
 
+      const loopTracer = trace.getTracer("opencode.session.loop")
+
       const runLoop: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
         function* (sessionID: SessionID) {
           const ctx = yield* InstanceState.context
           let structured: unknown | undefined
           let step = 0
           const session = yield* sessions.get(sessionID)
+          const trajectoryStart = performance.now()
 
           while (true) {
+            const iterStart = performance.now()
+            const iterSpan = loopTracer.startSpan("session.loop.iteration", {
+              attributes: {
+                "session.id": sessionID,
+                "loop.step": step + 1,
+              },
+            })
+
             yield* status.set(sessionID, { type: "busy" })
             log.info("loop", { step, sessionID })
 
+            // --- Stage: load messages from DB ---
+            const dbLoadT0 = performance.now()
             let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+            const dbLoadMs = performance.now() - dbLoadT0
 
             let lastUser: MessageV2.User | undefined
             let lastAssistant: MessageV2.Assistant | undefined
@@ -1378,6 +1393,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               lastUser.id < lastAssistant.id
             ) {
               log.info("exiting loop", { sessionID })
+              iterSpan.setAttribute("loop.exit_reason", "assistant_finished")
+              iterSpan.setAttribute("loop.db_load_ms", dbLoadMs)
+              iterSpan.setAttribute("loop.total_steps", step)
+              iterSpan.end()
               break
             }
 
@@ -1395,10 +1414,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             if (task?.type === "subtask") {
               yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+              iterSpan.setAttribute("loop.action", "subtask")
+              iterSpan.setAttribute("loop.db_load_ms", dbLoadMs)
+              iterSpan.end()
               continue
             }
 
             if (task?.type === "compaction") {
+              const compactT0 = performance.now()
               const result = yield* compaction.process({
                 messages: msgs,
                 parentID: lastUser.id,
@@ -1406,6 +1429,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 auto: task.auto,
                 overflow: task.overflow,
               })
+              iterSpan.setAttribute("loop.action", "compaction")
+              iterSpan.setAttribute("loop.db_load_ms", dbLoadMs)
+              iterSpan.setAttribute("loop.compaction_ms", performance.now() - compactT0)
+              iterSpan.end()
               if (result === "stop") break
               continue
             }
@@ -1416,6 +1443,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
             ) {
               yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+              iterSpan.setAttribute("loop.action", "overflow_compact_scheduled")
+              iterSpan.setAttribute("loop.db_load_ms", dbLoadMs)
+              iterSpan.end()
               continue
             }
 
@@ -1425,12 +1455,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
               const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
               yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+              iterSpan.setStatus({ code: SpanStatusCode.ERROR, message: error.message })
+              iterSpan.end()
               throw error
             }
             const maxSteps = agent.steps ?? Infinity
             const isLastStep = step >= maxSteps
             msgs = yield* insertReminders({ messages: msgs, agent, session })
 
+            // --- Stage: persist assistant message shell ---
+            const dbStoreT0 = performance.now()
             const msg: MessageV2.Assistant = {
               id: MessageID.ascending(),
               parentID: lastUser.id,
@@ -1447,17 +1481,24 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               sessionID,
             }
             yield* sessions.updateMessage(msg)
+            const dbStoreMs = performance.now() - dbStoreT0
+
+            // --- Stage: create processor (includes snapshot capture) ---
+            const processorT0 = performance.now()
             const handle = yield* processor.create({
               assistantMessage: msg,
               sessionID,
               model,
             })
+            const processorCreateMs = performance.now() - processorT0
 
             const outcome: "break" | "continue" = yield* Effect.onExit(
               Effect.gen(function* () {
                 const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
                 const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
+                // --- Stage: resolve tools ---
+                const resolveToolsT0 = performance.now()
                 const tools = yield* resolveTools({
                   agent,
                   session,
@@ -1467,6 +1508,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   bypassAgentCheck,
                   messages: msgs,
                 })
+                const resolveToolsMs = performance.now() - resolveToolsT0
 
                 if (lastUser.format?.type === "json_schema") {
                   tools["StructuredOutput"] = createStructuredOutputTool({
@@ -1499,15 +1541,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
                 yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+                // --- Stage: build messages for model ---
+                const buildMsgsT0 = performance.now()
                 const [skills, env, instructions, modelMsgs] = yield* Effect.all([
                   Effect.promise(() => SystemPrompt.skills(agent)),
                   Effect.promise(() => SystemPrompt.environment(model)),
                   instruction.system().pipe(Effect.orDie),
                   Effect.promise(() => MessageV2.toModelMessages(msgs, model)),
                 ])
+                const buildMsgsMs = performance.now() - buildMsgsT0
+
                 const system = [...env, ...(skills ? [skills] : []), ...instructions]
                 const format = lastUser.format ?? { type: "text" as const }
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+
+                // --- Stage: LLM call + tool execution (via processor) ---
+                const llmT0 = performance.now()
                 const result = yield* handle.process({
                   user: lastUser,
                   agent,
@@ -1520,11 +1569,60 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   model,
                   toolChoice: format.type === "json_schema" ? "required" : undefined,
                 })
+                const llmMs = performance.now() - llmT0
+
+                // Count tool calls executed in this step
+                const toolParts = (yield* Effect.promise(() => MessageV2.parts(handle.message.id))).filter(
+                  (p: MessageV2.Part) => p.type === "tool",
+                ) as MessageV2.ToolPart[]
+                const toolCount = toolParts.length
+                const toolDurationMs = toolParts.reduce((sum, p) => {
+                  if (p.state.status === "completed" || p.state.status === "error") {
+                    const t = p.state.time
+                    if (t.start && t.end) return sum + (t.end - t.start)
+                  }
+                  return sum
+                }, 0)
+
+                // Record all timing attributes on the iteration span
+                const tokens = handle.message.tokens
+                iterSpan.setAttributes({
+                  "loop.step": step,
+                  "loop.action": "llm_call",
+                  "loop.agent": agent.name,
+                  "loop.model": model.id,
+                  "loop.is_last_step": isLastStep,
+                  "loop.message_count": modelMsgs.length,
+                  // Timing breakdown (ms)
+                  "loop.db_load_ms": dbLoadMs,
+                  "loop.db_store_ms": dbStoreMs,
+                  "loop.processor_create_ms": processorCreateMs,
+                  "loop.resolve_tools_ms": resolveToolsMs,
+                  "loop.build_messages_ms": buildMsgsMs,
+                  "loop.llm_and_tools_ms": llmMs,
+                  "loop.tool_execution_ms": toolDurationMs,
+                  "loop.llm_only_ms": llmMs - toolDurationMs,
+                  "loop.iteration_ms": performance.now() - iterStart,
+                  // Token usage
+                  "loop.tokens.input": tokens.input,
+                  "loop.tokens.output": tokens.output,
+                  "loop.tokens.reasoning": tokens.reasoning,
+                  "loop.tokens.cache_read": tokens.cache.read,
+                  "loop.tokens.cache_write": tokens.cache.write,
+                  // Tool stats
+                  "loop.tool_count": toolCount,
+                  "loop.tool_names": toolParts.map((p) => p.tool).join(","),
+                  // Result
+                  "loop.processor_result": result,
+                  "loop.finish_reason": handle.message.finish ?? "none",
+                  "loop.cost": handle.message.cost,
+                })
 
                 if (structured !== undefined) {
                   handle.message.structured = structured
                   handle.message.finish = handle.message.finish ?? "stop"
                   yield* sessions.updateMessage(handle.message)
+                  iterSpan.end()
                   return "break" as const
                 }
 
@@ -1536,11 +1634,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                       retries: 0,
                     }).toObject()
                     yield* sessions.updateMessage(handle.message)
+                    iterSpan.end()
                     return "break" as const
                   }
                 }
 
-                if (result === "stop") return "break" as const
+                if (result === "stop") {
+                  iterSpan.end()
+                  return "break" as const
+                }
                 if (result === "compact") {
                   yield* compaction.create({
                     sessionID,
@@ -1550,16 +1652,31 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     overflow: !handle.message.finish,
                   })
                 }
+                iterSpan.end()
                 return "continue" as const
               }),
               Effect.fnUntraced(function* (exit) {
-                if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) yield* handle.abort()
+                if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+                  yield* handle.abort()
+                  iterSpan.setStatus({ code: SpanStatusCode.ERROR, message: "interrupted" })
+                  iterSpan.end()
+                }
                 yield* InstanceState.withALS(() => instruction.clear(handle.message.id)).pipe(Effect.flatMap((x) => x))
               }),
             )
             if (outcome === "break") break
             continue
           }
+
+          // Record trajectory-level span covering all steps
+          const trajectorySpan = loopTracer.startSpan("session.loop.trajectory", {
+            attributes: {
+              "session.id": sessionID,
+              "trajectory.total_steps": step,
+              "trajectory.total_ms": performance.now() - trajectoryStart,
+            },
+          })
+          trajectorySpan.end()
 
           yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
           return yield* lastAssistant(sessionID)

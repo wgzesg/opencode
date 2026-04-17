@@ -1,4 +1,6 @@
 import { BusEvent } from "@/bus/bus-event"
+import { Log } from "@/util/log"
+import { Token } from "@/util/token"
 import { SessionID, MessageID, PartID } from "./schema"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
@@ -24,6 +26,8 @@ interface FetchDecompressionError extends Error {
 }
 
 export namespace MessageV2 {
+  const log = Log.create({ service: "session.message" })
+
   export function isMedia(mime: string) {
     return mime.startsWith("image/") || mime === "application/pdf"
   }
@@ -580,6 +584,8 @@ export namespace MessageV2 {
   ) {
     const result: UIMessage[] = []
     const toolNames = new Set<string>()
+    let replacedCount = 0
+    let replacedTokensEstimate = 0
     // Track media from tool results that need to be injected as user messages
     // for providers that don't support media in tool results.
     //
@@ -715,7 +721,12 @@ export namespace MessageV2 {
           if (part.type === "tool") {
             toolNames.add(part.tool)
             if (part.state.status === "completed") {
-              const outputText = part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output
+              const isCompacted = Boolean(part.state.time.compacted)
+              if (isCompacted) {
+                replacedCount++
+                replacedTokensEstimate += Token.estimate(part.state.output)
+              }
+              const outputText = isCompacted ? "[Old tool result content cleared]" : part.state.output
               const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
 
               // For providers that don't support media in tool results, extract media files
@@ -796,6 +807,14 @@ export namespace MessageV2 {
           }
         }
       }
+    }
+
+    if (replacedCount > 0) {
+      log.info("tool outputs replaced with placeholders", {
+        replaced_count: replacedCount,
+        replaced_tokens_estimate: replacedTokensEstimate,
+        total_messages: input.length,
+      })
     }
 
     const tools = Object.fromEntries(Array.from(toolNames).map((toolName) => [toolName, { toModelOutput }]))
@@ -903,18 +922,30 @@ export namespace MessageV2 {
   export async function filterCompacted(msgs: Iterable<MessageV2.WithParts> | AsyncIterable<MessageV2.WithParts>) {
     const result = [] as MessageV2.WithParts[]
     const completed = new Set<string>()
+    let totalScanned = 0
+    let boundaryId: string | undefined
     for await (const msg of msgs) {
+      totalScanned++
       result.push(msg)
       if (
         msg.info.role === "user" &&
         completed.has(msg.info.id) &&
         msg.parts.some((part) => part.type === "compaction")
-      )
+      ) {
+        boundaryId = msg.info.id
         break
+      }
       if (msg.info.role === "assistant" && msg.info.summary && msg.info.finish && !msg.info.error)
         completed.add(msg.info.parentID)
     }
     result.reverse()
+    if (boundaryId) {
+      log.info("filterCompacted applied", {
+        total_scanned: totalScanned,
+        kept_messages: result.length,
+        compaction_boundary: boundaryId,
+      })
+    }
     return result
   }
 
